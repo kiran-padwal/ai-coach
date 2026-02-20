@@ -1,0 +1,41 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+backend/temp/*.jpg
+backend/temp/*.png
+backend/temp/*.wav
+!backend/temp/.gitkeep
+
+# Mobile
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/.cxx/
+mobile/.bundle/
+
+# Logs
+*.log
+logs/
+
+# API Keys (if you add them later)
+**/secrets.json
