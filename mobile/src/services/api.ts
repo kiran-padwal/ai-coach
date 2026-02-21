@@ -1,7 +1,4 @@
-import axios from 'axios';
 import {API, REQUEST_TIMEOUT, TTS_ENABLED} from '../config';
-
-const http = axios.create({timeout: REQUEST_TIMEOUT});
 
 export interface CoachResponse {
   text: string;
@@ -38,11 +35,24 @@ export async function analyzeFrame(
 
   form.append('tts', String(TTS_ENABLED));
 
-  const response = await http.post<CoachResponse>(API.analyze, form, {
-    headers: {'Content-Type': 'multipart/form-data'},
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
-  return response.data;
+  try {
+    const response = await fetch(API.analyze, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -52,13 +62,67 @@ export async function askQuestion(
   question: string,
   history: HistoryEntry[] = [],
 ): Promise<CoachResponse> {
-  const response = await http.post<CoachResponse>(API.ask, {
-    question,
-    history,
-    tts: TTS_ENABLED,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
-  return response.data;
+  try {
+    const response = await fetch(API.ask, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question, history, tts: TTS_ENABLED}),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fast path: send OCR-detected screen text + question to Codellama.
+ * Skips LLaVA entirely — much faster (~10s vs ~60s).
+ *
+ * @param question   - User's question.
+ * @param screenText - Text extracted from the screen by MLKit OCR.
+ * @param history    - Conversation history.
+ */
+export async function askWithContext(
+  question: string,
+  screenText: string,
+  history: HistoryEntry[] = [],
+): Promise<CoachResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+  // Prepend screen content to the question so the model sees both
+  const questionWithContext =
+    `[Screen content]\n${screenText.slice(0, 1500)}\n\n[Question]\n${question}`;
+
+  try {
+    const response = await fetch(API.ask, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        question: questionWithContext,
+        history,
+        tts: TTS_ENABLED,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -66,8 +130,11 @@ export async function askQuestion(
  */
 export async function checkHealth(): Promise<{ok: boolean; missing?: string[]}> {
   try {
-    const response = await http.get(API.health, {timeout: 5000});
-    return response.data;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(API.health, {signal: controller.signal});
+    return await response.json();
   } catch {
     return {ok: false};
   }

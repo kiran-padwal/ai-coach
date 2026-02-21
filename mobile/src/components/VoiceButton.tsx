@@ -1,5 +1,6 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
+  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -13,41 +14,53 @@ import Voice, {
 } from '@react-native-voice/voice';
 
 interface VoiceButtonProps {
-  /** Called when the user finishes speaking with the recognised transcript. */
   onResult: (text: string) => void;
-  /** Disable interaction while AI is responding. */
   disabled?: boolean;
 }
 
 export default function VoiceButton({onResult, disabled}: VoiceButtonProps) {
   const [listening, setListening] = useState(false);
   const [partial, setPartial] = useState('');
+  const latestResult = useRef(''); // always holds the freshest result
 
   useEffect(() => {
-    Voice.onSpeechResults = (e: SpeechResultsEvent) => {
-      const best = e.value?.[0] ?? '';
-      setPartial(best);
+    Voice.onSpeechPartialResults = (e: SpeechResultsEvent) => {
+      const text = e.value?.[0] ?? '';
+      latestResult.current = text;
+      setPartial(text);
     };
 
-    Voice.onSpeechEnd = async () => {
+    Voice.onSpeechResults = (e: SpeechResultsEvent) => {
+      const text = e.value?.[0] ?? '';
+      latestResult.current = text;
+      setPartial(text);
+    };
+
+    Voice.onSpeechEnd = () => {
       setListening(false);
-      const result = partial;
       setPartial('');
+      const result = latestResult.current;
+      latestResult.current = '';
       if (result.trim()) {
         onResult(result.trim());
       }
     };
 
     Voice.onSpeechError = (e: SpeechErrorEvent) => {
+      const code = e.error?.code ?? '';
+      const msg = e.error?.message ?? 'Unknown error';
       console.warn('Speech error:', e.error);
       setListening(false);
       setPartial('');
+      latestResult.current = '';
+      // Show error so we can debug on-device
+      Alert.alert('Speech Error', `Code: ${code}\n${msg}`);
     };
 
     return () => {
       Voice.destroy().then(Voice.removeAllListeners);
     };
-  }, [onResult, partial]);
+  }, [onResult]);
 
   const requestMicPermission = useCallback(async () => {
     if (Platform.OS === 'android') {
@@ -56,30 +69,31 @@ export default function VoiceButton({onResult, disabled}: VoiceButtonProps) {
       );
       return granted === PermissionsAndroid.RESULTS.GRANTED;
     }
-    return true; // iOS handles via Info.plist
+    return true;
   }, []);
 
   const startListening = useCallback(async () => {
-    if (disabled || listening) {
-      return;
-    }
+    if (disabled || listening) return;
     const ok = await requestMicPermission();
-    if (!ok) {
-      return;
-    }
+    if (!ok) return;
     try {
+      latestResult.current = '';
       await Voice.start('en-US');
       setListening(true);
       setPartial('');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Voice start error:', err);
+      Alert.alert(
+        'Speech Recognition Failed',
+        'Could not start voice input.\n\n' +
+          (err?.message ?? 'Unknown error') +
+          '\n\nPlease type your question instead.',
+      );
     }
   }, [disabled, listening, requestMicPermission]);
 
   const stopListening = useCallback(async () => {
-    if (!listening) {
-      return;
-    }
+    if (!listening) return;
     try {
       await Voice.stop();
     } catch (err) {
@@ -109,10 +123,7 @@ export default function VoiceButton({onResult, disabled}: VoiceButtonProps) {
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    alignItems: 'center',
-    gap: 8,
-  },
+  wrapper: {alignItems: 'center', gap: 8},
   partial: {
     color: '#ccc',
     fontSize: 13,
@@ -129,18 +140,8 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     backgroundColor: '#2563eb',
   },
-  buttonActive: {
-    backgroundColor: '#dc2626',
-  },
-  buttonDisabled: {
-    opacity: 0.4,
-  },
-  icon: {
-    fontSize: 20,
-  },
-  label: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  buttonActive: {backgroundColor: '#dc2626'},
+  buttonDisabled: {opacity: 0.4},
+  icon: {fontSize: 20},
+  label: {color: '#fff', fontSize: 16, fontWeight: '600'},
 });

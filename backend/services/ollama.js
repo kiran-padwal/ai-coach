@@ -18,9 +18,18 @@ async function analyzeImage(imagePath, question) {
   const imageBuffer = fs.readFileSync(imagePath);
   const base64Image = imageBuffer.toString('base64');
 
+  const baseInstruction = `You are a coding coach. Read ALL visible text, code, errors, and file names exactly as written on the screen.
+
+Response rules:
+- Maximum 3 short steps
+- Each step: one sentence only
+- Do NOT give the full solution — guide understanding
+- Start with what you see on screen, then give the next step
+- Format: "1. ... 2. ... 3. ..."`;
+
   const prompt = question
-    ? `You are an expert coding coach. Look at this screen and answer: ${question}`
-    : `You are an expert coding coach. Describe what you see on this screen and provide helpful coding guidance.`;
+    ? `${baseInstruction}\n\nQuestion: ${question}`
+    : `${baseInstruction}\n\nWhat do you see? Give the single most useful next step.`;
 
   logger.info(`Sending image to ${config.VISION_MODEL} model...`);
 
@@ -31,7 +40,7 @@ async function analyzeImage(imagePath, question) {
     stream: false,
     options: {
       temperature: 0.7,
-      num_predict: 500,
+      num_predict: 200,
     },
   });
 
@@ -46,8 +55,9 @@ async function analyzeImage(imagePath, question) {
  */
 async function askQuestion(question, history = []) {
   const systemPrompt =
-    'You are an expert coding coach. Give concise, practical advice. ' +
-    'Focus on helping the user understand concepts and fix their code.';
+    'You are a coding coach. Never give the full answer. ' +
+    'Give max 3 steps, one sentence each, guiding the user to understand and solve it themselves. ' +
+    'Format: "1. ... 2. ... 3. ..."';
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -63,7 +73,7 @@ async function askQuestion(question, history = []) {
     stream: false,
     options: {
       temperature: 0.7,
-      num_predict: 500,
+      num_predict: 200,
     },
   });
 

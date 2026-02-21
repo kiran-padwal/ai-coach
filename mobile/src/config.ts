@@ -7,7 +7,7 @@
 //    Windows:    ipconfig
 // ─────────────────────────────────────────────────────────
 
-export const BACKEND_URL = 'http://192.168.1.100:8000';
+export const BACKEND_URL = 'http://192.168.0.139:8000';
 
 export const API = {
   analyze: `${BACKEND_URL}/api/coach/analyze`,
@@ -18,5 +18,5 @@ export const API = {
 // How long to wait for a response from the backend (ms)
 export const REQUEST_TIMEOUT = 120_000;
 
-// Enable voice output by default
-export const TTS_ENABLED = true;
+// Piper TTS not installed yet — disable until configured
+export const TTS_ENABLED = false;

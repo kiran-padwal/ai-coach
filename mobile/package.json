@@ -9,13 +9,15 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@react-native-ml-kit/text-recognition": "^2.0.0",
     "@react-native-voice/voice": "^3.2.4",
-    "axios": "^1.6.0",
     "react": "18.3.1",
     "react-native": "0.76.7",
     "react-native-fs": "^2.20.0",
     "react-native-sound": "^0.13.0",
-    "react-native-vision-camera": "^4.7.3"
+    "react-native-tts": "^4.1.1",
+    "react-native-vision-camera": "^4.7.3",
+    "react-native-worklets-core": "^1.6.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",

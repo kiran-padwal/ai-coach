@@ -2,10 +2,34 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const sharp = require('sharp');
 const config = require('../config');
 const ollama = require('../services/ollama');
 const tts = require('../services/tts');
 const logger = require('../utils/logger');
+
+/**
+ * Crop image to the center 75% width × 70% height.
+ * This removes edges where other monitors / windows appear.
+ * Returns the path to the cropped image (overwrites original).
+ */
+async function cropToFocus(imagePath) {
+  const meta = await sharp(imagePath).metadata();
+  const { width, height } = meta;
+
+  const cropW = Math.round(width * 0.85);
+  const cropH = Math.round(height * 0.80);
+  const left  = Math.round((width  - cropW) / 2);
+  const top   = Math.round((height - cropH) / 2);
+
+  const croppedPath = imagePath.replace(/(\.\w+)$/, '_crop$1');
+  await sharp(imagePath)
+    .extract({ left, top, width: cropW, height: cropH })
+    .toFile(croppedPath);
+
+  fs.unlink(imagePath, () => {}); // delete original
+  return croppedPath;
+}
 
 const router = express.Router();
 
@@ -51,7 +75,9 @@ router.post('/analyze', upload.single('image'), async (req, res) => {
 
     logger.info(`/analyze - question: "${question}", tts: ${wantTts}`);
 
-    const text = await ollama.analyzeImage(imagePath, question);
+    // Crop to center focus area before AI analysis
+    const focusedPath = await cropToFocus(imagePath);
+    const text = await ollama.analyzeImage(focusedPath, question);
 
     let audioUrl;
     if (wantTts) {
@@ -65,10 +91,9 @@ router.post('/analyze', upload.single('image'), async (req, res) => {
     logger.error('/analyze error:', err.message);
     res.status(500).json({ error: err.message });
   } finally {
-    // Clean up uploaded image
-    if (imagePath) {
-      fs.unlink(imagePath, () => {});
-    }
+    // cropToFocus deletes original; also clean up cropped version
+    const croppedPath = imagePath?.replace(/(\.\w+)$/, '_crop$1');
+    if (croppedPath) fs.unlink(croppedPath, () => {});
   }
 });
 
