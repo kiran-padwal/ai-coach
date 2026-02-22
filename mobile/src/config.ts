@@ -12,11 +12,12 @@ export const BACKEND_URL = 'http://192.168.0.139:8000';
 export const API = {
   analyze: `${BACKEND_URL}/api/coach/analyze`,
   ask: `${BACKEND_URL}/api/coach/ask`,
+  askStream: `${BACKEND_URL}/api/coach/ask/stream`,
   health: `${BACKEND_URL}/api/coach/health`,
 };
 
 // How long to wait for a response from the backend (ms)
 export const REQUEST_TIMEOUT = 120_000;
 
-// Piper TTS not installed yet — disable until configured
-export const TTS_ENABLED = false;
+// Enable backend TTS (ElevenLabs Jarvis voice)
+export const TTS_ENABLED = true;

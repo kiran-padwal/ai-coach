@@ -18,6 +18,7 @@ interface ResponseDisplayProps {
   text: string;
   audioUrl?: string;
   error?: string;
+  stopAudio?: boolean; // set true to interrupt playback immediately
 }
 
 export default function ResponseDisplay({
@@ -25,8 +26,17 @@ export default function ResponseDisplay({
   text,
   audioUrl,
   error,
+  stopAudio,
 }: ResponseDisplayProps) {
   const soundRef = useRef<Sound | null>(null);
+
+  // Stop playback immediately when user starts speaking
+  useEffect(() => {
+    if (stopAudio && soundRef.current) {
+      soundRef.current.stop(() => soundRef.current?.release());
+      soundRef.current = null;
+    }
+  }, [stopAudio]);
 
   // Play audio whenever a new audioUrl arrives
   useEffect(() => {

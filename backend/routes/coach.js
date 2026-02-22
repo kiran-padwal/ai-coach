@@ -5,8 +5,12 @@ const fs = require('fs');
 const sharp = require('sharp');
 const config = require('../config');
 const ollama = require('../services/ollama');
+const groq = require('../services/groq');
 const tts = require('../services/tts');
 const logger = require('../utils/logger');
+
+// Use Groq if API key is configured, otherwise fall back to local Ollama
+const ai = config.GROQ_API_KEY ? groq : ollama;
 
 /**
  * Crop image to the center 75% width × 70% height.
@@ -77,13 +81,16 @@ router.post('/analyze', upload.single('image'), async (req, res) => {
 
     // Crop to center focus area before AI analysis
     const focusedPath = await cropToFocus(imagePath);
-    const text = await ollama.analyzeImage(focusedPath, question);
+    const text = await ai.analyzeImage(focusedPath, question);
 
     let audioUrl;
-    if (wantTts) {
-      const audioPath = await tts.synthesize(text);
-      const audioFilename = path.basename(audioPath);
-      audioUrl = `/api/coach/audio/${audioFilename}`;
+    if (wantTts && config.ELEVENLABS_API_KEY) {
+      try {
+        const audioPath = await tts.synthesize(text);
+        audioUrl = `/api/coach/audio/${path.basename(audioPath)}`;
+      } catch (ttsErr) {
+        logger.warn('TTS failed, skipping audio:', ttsErr.message);
+      }
     }
 
     res.json({ text, audioUrl });
@@ -116,12 +123,16 @@ router.post('/ask', express.json(), async (req, res) => {
   try {
     logger.info(`/ask - question: "${question.slice(0, 80)}..."`);
 
-    const text = await ollama.askQuestion(question, history);
+    const text = await ai.askQuestion(question, history);
 
     let audioUrl;
-    if (wantTts) {
-      const audioPath = await tts.synthesize(text);
-      audioUrl = `/api/coach/audio/${path.basename(audioPath)}`;
+    if (wantTts && config.ELEVENLABS_API_KEY) {
+      try {
+        const audioPath = await tts.synthesize(text);
+        audioUrl = `/api/coach/audio/${path.basename(audioPath)}`;
+      } catch (ttsErr) {
+        logger.warn('TTS failed, skipping audio:', ttsErr.message);
+      }
     }
 
     res.json({ text, audioUrl });
@@ -129,6 +140,34 @@ router.post('/ask', express.json(), async (req, res) => {
     logger.error('/ask error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+/**
+ * POST /api/coach/ask/stream
+ * Streams the AI response token-by-token via Server-Sent Events.
+ * Body: { question, history? }
+ */
+router.post('/ask/stream', express.json(), async (req, res) => {
+  const { question, history = [] } = req.body;
+  if (!question) return res.status(400).json({ error: 'question is required' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  try {
+    logger.info(`/ask/stream - question: "${question.slice(0, 80)}"`);
+    await (ollama.askQuestionStreaming)(question, history, (chunk) => {
+      res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+    });
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+  } catch (err) {
+    logger.error('/ask/stream error:', err.message);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+  }
+  res.end();
 });
 
 /**
@@ -143,7 +182,9 @@ router.get('/audio/:filename', (req, res) => {
     return res.status(404).json({ error: 'Audio file not found' });
   }
 
-  res.setHeader('Content-Type', 'audio/wav');
+  const ext = path.extname(filename).toLowerCase();
+  const contentType = ext === '.mp3' ? 'audio/mpeg' : 'audio/wav';
+  res.setHeader('Content-Type', contentType);
   const stream = fs.createReadStream(filePath);
   stream.pipe(res);
   stream.on('close', () => tts.cleanup(filePath));

@@ -1,23 +1,24 @@
-import React, {useEffect, useRef, useState} from 'react';
-import {StyleSheet, View, Text} from 'react-native';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
+import {StyleSheet, View, Text, TouchableOpacity} from 'react-native';
 import {
   Camera,
   useCameraDevice,
   useCameraPermission,
-  useFrameProcessor,
-  VisionCameraProxy,
 } from 'react-native-vision-camera';
-import {useSharedValue, runOnJS} from 'react-native-worklets-core';
+import TextRecognition from '@react-native-ml-kit/text-recognition';
 
-// The targeting frame covers center 85% width × 80% height
-const FRAME_W = 0.85;
-const FRAME_H = 0.80;
+// The targeting frame covers center 70% width × 65% height (tighter = less noise)
+const FRAME_W = 0.70;
+const FRAME_H = 0.65;
 
 // Stabilization delay before LLaVA capture (ms)
 const STABILIZE_MS = 1500;
 
-// Load the native text scanner plugin registered in TextScannerPlugin.kt
-const scanTextPlugin = VisionCameraProxy.initFrameProcessorPlugin('scanText', {});
+// How often to run OCR (ms)
+const OCR_INTERVAL_MS = 600;
+
+// Available zoom levels
+const ZOOM_LEVELS = [1, 2, 3];
 
 interface TextBlock {
   text: string;
@@ -25,13 +26,6 @@ interface TextBlock {
   y: number;
   width: number;
   height: number;
-}
-
-interface ScanResult {
-  text: string;
-  blocks: TextBlock[];
-  frameWidth: number;
-  frameHeight: number;
 }
 
 interface CameraViewProps {
@@ -52,52 +46,77 @@ export default function CameraView({
   const [textBlocks, setTextBlocks] = useState<TextBlock[]>([]);
   const [stabilizing, setStabilizing] = useState(false);
   const [viewSize, setViewSize] = useState({width: 1, height: 1});
-  const [frameSize, setFrameSize] = useState({width: 1, height: 1});
-  const isCapturingRef = useRef(false);
+  const [imageSize, setImageSize] = useState({width: 1, height: 1});
+  const [zoom, setZoom] = useState(2); // default 2x zoom for screen reading
+  const isOcrRunning = useRef(false);
+  const isCapturingForLLaVA = useRef(false);
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
   }, [hasPermission, requestPermission]);
 
-  // Called from worklet thread → runs on JS thread via runOnJS
-  const handleScanResult = (result: ScanResult | null) => {
-    if (!result) return;
+  const runOcr = useCallback(async () => {
+    if (isOcrRunning.current || isCapturingForLLaVA.current) return;
+    if (!cameraRef.current) return;
+    isOcrRunning.current = true;
+    try {
+      const photo = await cameraRef.current.takePhoto({
+        qualityPrioritization: 'speed',
+        skipMetadata: true,
+      });
+      const uri = `file://${photo.path}`;
+      const result = await TextRecognition.recognize(uri);
 
-    const fw = result.frameWidth || 1;
-    const fh = result.frameHeight || 1;
-    setFrameSize({width: fw, height: fh});
+      // Use image dimensions from photo
+      const fw = photo.width || viewSize.width;
+      const fh = photo.height || viewSize.height;
+      setImageSize({width: fw, height: fh});
 
-    // Filter blocks to center focus area only
-    const frameLeft   = fw * ((1 - FRAME_W) / 2);
-    const frameTop    = fh * ((1 - FRAME_H) / 2);
-    const frameRight  = frameLeft + fw * FRAME_W;
-    const frameBottom = frameTop  + fh * FRAME_H;
+      // Filter blocks to center focus area only
+      const frameLeft   = fw * ((1 - FRAME_W) / 2);
+      const frameTop    = fh * ((1 - FRAME_H) / 2);
+      const frameRight  = frameLeft + fw * FRAME_W;
+      const frameBottom = frameTop  + fh * FRAME_H;
 
-    const filtered = result.blocks.filter(b => {
-      const cx = b.x + b.width / 2;
-      const cy = b.y + b.height / 2;
-      return cx >= frameLeft && cx <= frameRight &&
-             cy >= frameTop  && cy <= frameBottom;
-    });
+      const filtered: TextBlock[] = result.blocks
+        .filter(b => {
+          if (!b.frame) return false;
+          const cx = b.frame.left + b.frame.width / 2;
+          const cy = b.frame.top  + b.frame.height / 2;
+          return cx >= frameLeft && cx <= frameRight &&
+                 cy >= frameTop  && cy <= frameBottom;
+        })
+        .map(b => ({
+          text: b.text,
+          x: b.frame!.left,
+          y: b.frame!.top,
+          width: b.frame!.width,
+          height: b.frame!.height,
+        }));
 
-    const text = filtered.map(b => b.text).join('\n').trim();
-    setLiveText(text);
-    setTextBlocks(filtered);
-    if (onTextDetected) onTextDetected(text);
-  };
+      const text = filtered.map(b => b.text).join('\n').trim();
+      setLiveText(text);
+      setTextBlocks(filtered);
+      if (onTextDetected) onTextDetected(text);
+    } catch {
+      // ignore transient errors (e.g., camera busy)
+    } finally {
+      isOcrRunning.current = false;
+    }
+  }, [onTextDetected, viewSize.width, viewSize.height]);
 
-  // TRUE AR: runs on every camera frame via VisionCamera worklet
-  const frameProcessor = useFrameProcessor(frame => {
-    'worklet';
-    if (!scanTextPlugin) return;
-    const result = scanTextPlugin.call(frame) as ScanResult | null;
-    runOnJS(handleScanResult)(result);
-  }, []);
+  // Continuous OCR loop
+  useEffect(() => {
+    if (!hasPermission || !device) return;
+    const interval = setInterval(runOcr, OCR_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [hasPermission, device, runOcr]);
 
-  // Capture with stabilization delay (for LLaVA fallback / visual mode)
+  // Capture with stabilization delay (for LLaVA)
   useEffect(() => {
     if (!captureNow) return;
     setStabilizing(true);
+    isCapturingForLLaVA.current = true;
     const timer = setTimeout(async () => {
       setStabilizing(false);
       if (!cameraRef.current) return;
@@ -109,6 +128,8 @@ export default function CameraView({
         onCapture(`file://${photo.path}`);
       } catch (err) {
         console.error('Capture failed:', err);
+      } finally {
+        isCapturingForLLaVA.current = false;
       }
     }, STABILIZE_MS);
     return () => clearTimeout(timer);
@@ -130,9 +151,9 @@ export default function CameraView({
     );
   }
 
-  // Scale factor: map frame pixel coords → view pixel coords
-  const scaleX = viewSize.width  / (frameSize.width  || 1);
-  const scaleY = viewSize.height / (frameSize.height || 1);
+  // Scale factor: map image pixel coords → view pixel coords
+  const scaleX = viewSize.width  / (imageSize.width  || 1);
+  const scaleY = viewSize.height / (imageSize.height || 1);
 
   return (
     <View
@@ -148,10 +169,24 @@ export default function CameraView({
         device={device}
         isActive
         photo
-        frameProcessor={frameProcessor}
+        zoom={zoom}
       />
 
-      {/* AR text block overlays — drawn exactly where text is on screen */}
+      {/* Zoom controls */}
+      <View style={styles.zoomRow}>
+        {ZOOM_LEVELS.map(z => (
+          <TouchableOpacity
+            key={z}
+            style={[styles.zoomBtn, zoom === z && styles.zoomBtnActive]}
+            onPress={() => setZoom(z)}>
+            <Text style={[styles.zoomText, zoom === z && styles.zoomTextActive]}>
+              {z}x
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Text block overlays */}
       {textBlocks.map((block, i) => (
         <View
           key={i}
@@ -204,7 +239,7 @@ export default function CameraView({
       {/* Live text strip */}
       {liveText.length > 0 && (
         <View style={styles.ocrOverlay}>
-          <Text style={styles.ocrLabel}>Reading (AR)</Text>
+          <Text style={styles.ocrLabel}>Live OCR</Text>
           <Text style={styles.ocrText} numberOfLines={3}>
             {liveText.slice(0, 150)}
           </Text>
@@ -260,4 +295,27 @@ const styles = StyleSheet.create({
     marginBottom: 2, textTransform: 'uppercase', letterSpacing: 1,
   },
   ocrText: {color: '#f1f5f9', fontSize: 11, fontFamily: 'monospace', lineHeight: 16},
+  zoomRow: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    flexDirection: 'column',
+    gap: 4,
+  },
+  zoomBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomBtnActive: {
+    backgroundColor: '#22d3ee',
+    borderColor: '#22d3ee',
+  },
+  zoomText: {color: '#fff', fontSize: 11, fontWeight: '700'},
+  zoomTextActive: {color: '#000'},
 });

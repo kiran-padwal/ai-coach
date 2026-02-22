@@ -126,6 +126,40 @@ export async function askWithContext(
 }
 
 /**
+ * Fast path: sends OCR text + question to the backend, returns full response.
+ * Uses llama3.2:1b which responds in ~4 seconds.
+ */
+export async function askWithContextStream(
+  question: string,
+  screenText: string,
+  history: HistoryEntry[],
+  onChunk: (partialText: string) => void,
+): Promise<CoachResponse> {
+  const questionWithContext =
+    `[Screen content]\n${screenText.slice(0, 1500)}\n\n[Question]\n${question}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+  try {
+    const response = await fetch(API.ask, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question: questionWithContext, history, tts: TTS_ENABLED}),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) throw new Error(`Server error: ${response.status}`);
+    const data = await response.json();
+    const text = data.text ?? '';
+    onChunk(text);
+    return {text, audioUrl: data.audioUrl};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Check that the backend and Ollama models are reachable.
  */
 export async function checkHealth(): Promise<{ok: boolean; missing?: string[]}> {

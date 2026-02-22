@@ -32,6 +32,10 @@ mobile/android/app/build/
 mobile/android/.gradle/
 mobile/android/.cxx/
 mobile/.bundle/
+mobile/android/app/src/main/assets/index.android.bundle*
+
+# Claude Code internal
+.claude/
 
 # Logs
 *.log

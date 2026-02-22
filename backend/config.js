@@ -5,10 +5,16 @@ const os = require('os');
 module.exports = {
   PORT: process.env.PORT || 8000,
 
-  // Ollama settings
+  // Groq API (set GROQ_API_KEY to use Groq instead of Ollama)
+  GROQ_API_KEY: process.env.GROQ_API_KEY || '',
+
+  // ElevenLabs TTS (Jarvis voice)
+  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
+
+  // Ollama settings (fallback when no Groq key)
   OLLAMA_URL: process.env.OLLAMA_URL || 'http://localhost:11434',
   VISION_MODEL: process.env.VISION_MODEL || 'llava',
-  CHAT_MODEL: process.env.CHAT_MODEL || 'codellama',
+  CHAT_MODEL: process.env.CHAT_MODEL || 'llama3.2:1b',
 
   // Piper TTS settings
   PIPER_EXECUTABLE: process.env.PIPER_EXECUTABLE || 'piper',

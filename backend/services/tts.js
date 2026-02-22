@@ -1,48 +1,56 @@
-const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const axios = require('axios');
 const config = require('../config');
 const logger = require('../utils/logger');
 
+// ElevenLabs voice ID — "Adam" is the closest to Jarvis (deep, authoritative British male)
+const ELEVENLABS_VOICE_ID = 'pNInz6obpgDQGcFmaJgB'; // Adam
+
 /**
- * Convert text to speech using Piper TTS.
- * Returns the path to the generated WAV file.
- * @param {string} text - Text to synthesize.
- * @returns {Promise<string>} - Absolute path to the output WAV file.
+ * Convert text to speech using ElevenLabs (Jarvis-like voice).
+ * Falls back to device TTS if no API key configured.
+ * Returns the path to the generated MP3 file.
  */
-function synthesize(text) {
-  return new Promise((resolve, reject) => {
-    const filename = `tts_${crypto.randomBytes(8).toString('hex')}.wav`;
-    const outputPath = path.join(config.TEMP_DIR, filename);
+async function synthesize(text) {
+  if (!config.ELEVENLABS_API_KEY) {
+    throw new Error('No ElevenLabs API key configured');
+  }
 
-    // Sanitize text: remove special chars that could break the shell command
-    const sanitizedText = text.replace(/['"\\]/g, ' ').replace(/\n/g, ' ');
+  const filename = `tts_${crypto.randomBytes(8).toString('hex')}.mp3`;
+  const outputPath = path.join(config.TEMP_DIR, filename);
 
-    const cmd = `echo "${sanitizedText}" | ${config.PIPER_EXECUTABLE} --model "${config.PIPER_VOICE}" --output_file "${outputPath}"`;
+  logger.info(`ElevenLabs TTS, voice: Adam, chars: ${text.length}`);
 
-    logger.info(`Running Piper TTS, output: ${filename}`);
+  const response = await axios.post(
+    `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+    {
+      text,
+      model_id: 'eleven_turbo_v2', // fastest model
+      voice_settings: {
+        stability: 0.55,        // more consistent, authoritative
+        similarity_boost: 0.80, // stays true to the voice character
+        style: 0.20,            // slight style emphasis
+        use_speaker_boost: true,
+      },
+    },
+    {
+      headers: {
+        'xi-api-key': config.ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg',
+      },
+      responseType: 'arraybuffer',
+      timeout: 15000,
+    }
+  );
 
-    exec(cmd, { timeout: 30000 }, (error, stdout, stderr) => {
-      if (error) {
-        logger.error('Piper TTS error:', stderr || error.message);
-        return reject(new Error(`TTS failed: ${stderr || error.message}`));
-      }
-
-      if (!fs.existsSync(outputPath)) {
-        return reject(new Error('TTS completed but output file not found'));
-      }
-
-      logger.info(`TTS file created: ${filename}`);
-      resolve(outputPath);
-    });
-  });
+  fs.writeFileSync(outputPath, Buffer.from(response.data));
+  logger.info(`ElevenLabs TTS file created: ${filename}`);
+  return outputPath;
 }
 
-/**
- * Delete a temp audio file after it has been served.
- * @param {string} filePath
- */
 function cleanup(filePath) {
   fs.unlink(filePath, (err) => {
     if (err) logger.warn(`Could not delete temp file: ${filePath}`);
